@@ -60,53 +60,21 @@ async function formatNow() {
   self._mode = mode;
 
   const code = `
-import json, ast, pprint, re
+import json, ast, pprint
 from js import input_str, _indent, _sort_keys, _mode
-
-def clean_json_string(s):
-    """清理常见的JSON格式问题"""
-    # 移除尾随逗号
-    s = re.sub(r',(\s*[}\]])', r'\\1', s)
-    # 移除空行
-    s = re.sub(r'\\n\\s*\\n', '\\n', s)
-    return s
 
 def parse_input(s: str):
     s = s.strip()
-    
-    # 先尝试清理后的JSON
-    try:
-        cleaned = clean_json_string(s)
-        return json.loads(cleaned)
-    except Exception as json_error:
-        pass
-    
-    # 再尝试原始JSON
+    # 先尝试 JSON（允许 true/false/null 等）
     try:
         return json.loads(s)
-    except json.JSONDecodeError as e:
-        # 提供详细的JSON错误信息
-        error_msg = str(e)
-        if "Expecting ',' delimiter" in error_msg:
-            raise ValueError("JSON格式错误：缺少逗号分隔符")
-        elif "Expecting property name enclosed in double quotes" in error_msg:
-            raise ValueError("JSON格式错误：属性名必须用双引号包围")
-        elif "Expecting value" in error_msg:
-            raise ValueError("JSON格式错误：属性值缺失")
-        elif "Extra data" in error_msg:
-            raise ValueError("JSON格式错误：存在多余字符")
-        elif "Expecting ',' delimiter" in error_msg or "Expecting '}'" in error_msg:
-            raise ValueError("JSON格式错误：可能是尾随逗号问题，请检查最后一个属性后是否有逗号")
-        else:
-            raise ValueError(f"JSON格式错误：{error_msg}")
     except Exception:
         pass
-    
-    # 最后尝试 Python 字面量（支持 True/False/None，单引号、元组等）
+    # 再尝试 Python 字面量（支持 True/False/None，单引号、元组等）
     try:
         return ast.literal_eval(s)
     except Exception as e:
-        raise ValueError(f"无法解析为 JSON 或 Python 字典。\\n\\n常见问题：\\n1. 尾随逗号：最后一个属性后不能有逗号\\n2. 属性名必须用双引号包围\\n3. 字符串值必须用双引号包围\\n4. 布尔值使用 true/false（小写）\\n\\n原始错误：{e}")
+        raise ValueError(f"无法解析为 JSON 或 Python 字典：{e}")
 
 obj = parse_input(input_str)
 
@@ -161,17 +129,11 @@ els.btnCopy.addEventListener('click', async () => {
 els.btnDownload.addEventListener('click', () => {
   const txt = els.output.textContent || '';
   if (!txt) return;
-  
-  // 根据输出模式决定文件类型和扩展名
-  const mode = els.modeRadios().value;
-  const fileExt = mode === 'json' ? '.json' : '.txt';
-  const mimeType = mode === 'json' ? 'application/json;charset=utf-8' : 'text/plain;charset=utf-8';
-  
-  const blob = new Blob([txt], { type: mimeType });
+  const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `beautified${fileExt}`;
+  a.download = 'beautified.json';
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -191,7 +153,7 @@ els.samplePy.addEventListener('click', () => {
   'dict': {'a':1,'b':2,'c':3},
   'int': 1,
   'float': 1.0,
-  'str': 'a'
+  'str': 'a',
 }`;
   formatNow();
 });
@@ -204,6 +166,7 @@ els.sampleJson.addEventListener('click', () => {
   "bool": true,
   "none": null,
   "list": ["a","b","c"],
+  "tuple": ("a","b","c"),
   "dict": {"a":1,"b":2,"c":3},
   "int": 1,
   "float": 1.0,
