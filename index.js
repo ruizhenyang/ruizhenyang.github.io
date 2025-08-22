@@ -166,10 +166,9 @@ els.sampleJson.addEventListener('click', () => {
   "bool": true,
   "none": null,
   "list": ["a","b","c"],
-  "tuple": ("a","b","c"),
   "dict": {"a":1,"b":2,"c":3},
   "int": 1,
-  "float": 1.0,
+  "float": 1.5,
   "str": "a"
 }`;
   formatNow();
