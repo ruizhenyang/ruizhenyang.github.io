@@ -1,428 +1,232 @@
-// Python字典美化工具 - 主要功能实现
-class DictFormatter {
-    constructor() {
-        this.initElements();
-        this.bindEvents();
-        this.setupInitialData();
-    }
+let pyodide = null;
+const els = {
+  input: document.getElementById('inputArea'),
+  output: document.getElementById('outputArea'),
+  leftStatus: document.getElementById('leftStatus'),
+  rightStatus: document.getElementById('rightStatus'),
+  btnFormat: document.getElementById('formatBtn'),
+  btnCopy: document.getElementById('copyBtn'),
+  btnDownload: document.getElementById('downloadBtn'),
+  indent: document.getElementById('indent'),
+  sortKeys: document.getElementById('sortKeys'),
+  modeRadios: () => document.querySelector('input[name="mode"]:checked'),
+  samplePy: document.getElementById('samplePy'),
+  sampleJson: document.getElementById('sampleJson'),
+  clearBtn: document.getElementById('clearBtn'),
+};
 
-    // 初始化DOM元素
-    initElements() {
-        this.inputArea = document.getElementById('inputArea');
-        this.outputArea = document.getElementById('outputArea');
-        this.clearBtn = document.getElementById('clearBtn');
-        this.formatBtn = document.getElementById('formatBtn');
-        this.copyBtn = document.getElementById('copyBtn');
-        this.expandAllBtn = document.getElementById('expandAllBtn');
-        this.collapseAllBtn = document.getElementById('collapseAllBtn');
-    }
+function setStatus(side, text, ok=false, err=false) {
+  const el = side === 'left' ? els.leftStatus : els.rightStatus;
+  el.textContent = text;
+  el.className = 'status' + (ok ? ' ok' : '') + (err ? ' err' : '');
+}
 
-    // 绑定事件
-    bindEvents() {
-        // 实时输入监听
-        this.inputArea.addEventListener('input', this.debounce(() => {
-            this.formatInput();
-        }, 300));
+async function boot() {
+  try {
+    setStatus('left', 'Pyodide 加载中…');
+    pyodide = await loadPyodide({ stdout:()=>{}, stderr:()=>{} });
+    // 预热：导入标准库模块
+    pyodide.runPython(`
+import json, ast, pprint
+def _warmup(): return True
+_warmup()
+`);
+    setStatus('left', 'Pyodide 就绪', true, false);
+    els.btnFormat.disabled = false;
+  } catch (e) {
+    setStatus('left', 'Pyodide 加载失败：' + (e && e.message ? e.message : e), false, true);
+    els.btnFormat.disabled = true;
+  }
+}
 
-        // 格式化按钮点击事件
-        this.formatBtn.addEventListener('click', () => this.formatInput());
-        
-        // 清空按钮事件
-        this.clearBtn.addEventListener('click', () => this.clearInput());
-        
-        // 复制按钮事件
-        this.copyBtn.addEventListener('click', () => this.copyOutput());
-        
-        // 展开/折叠按钮事件
-        this.expandAllBtn.addEventListener('click', () => this.expandAll());
-        this.collapseAllBtn.addEventListener('click', () => this.collapseAll());
+async function formatNow() {
+  if (!pyodide) return;
+  const input_str = els.input.value;
+  const indent = parseInt(els.indent.value || '2', 10);
+  const sort_keys = !!els.sortKeys.checked;
+  const mode = els.modeRadios().value; // 'json' | 'python'
+  if (!input_str.trim()) {
+    els.output.textContent = '';
+    setStatus('right', '请输入内容…');
+    return;
+  }
+  els.btnFormat.disabled = true;
+  setStatus('right', '解析与格式化中…');
 
-        // 键盘快捷键
-        document.addEventListener('keydown', (e) => {
-            if (e.ctrlKey || e.metaKey) {
-                switch (e.key) {
-                    case 'Enter':
-                        e.preventDefault();
-                        this.formatInput();
-                        break;
-                    case 'l':
-                        e.preventDefault();
-                        this.clearInput();
-                        break;
-                }
-            }
-        });
+  // 将参数注入到 Python 运行环境，避免字符串拼接注入问题
+  self.input_str = input_str;
+  self._indent = indent;
+  self._sort_keys = sort_keys;
+  self._mode = mode;
 
-        // 添加Tab键支持
-        this.inputArea.addEventListener('keydown', (e) => {
-            if (e.key === 'Tab') {
-                e.preventDefault();
-                const start = this.inputArea.selectionStart;
-                const end = this.inputArea.selectionEnd;
-                
-                // 插入4个空格
-                this.inputArea.value = this.inputArea.value.substring(0, start) + '    ' + this.inputArea.value.substring(end);
-                this.inputArea.selectionStart = this.inputArea.selectionEnd = start + 4;
-            }
-        });
-    }
+  const code = `
+import json, ast, pprint, re
+from js import input_str, _indent, _sort_keys, _mode
 
-    // 设置初始示例数据
-    setupInitialData() {
-        const exampleData = ``;
-        this.inputArea.value = exampleData;
-        this.formatInput();
-    }
+def clean_json_string(s):
+    """清理常见的JSON格式问题"""
+    # 移除尾随逗号
+    s = re.sub(r',(\s*[}\]])', r'\\1', s)
+    # 移除空行
+    s = re.sub(r'\\n\\s*\\n', '\\n', s)
+    return s
 
-    // 防抖函数
-    debounce(func, wait) {
-        let timeout;
-        return function executedFunction(...args) {
-            const later = () => {
-                clearTimeout(timeout);
-                func(...args);
-            };
-            clearTimeout(timeout);
-            timeout = setTimeout(later, wait);
-        };
-    }
+def parse_input(s: str):
+    s = s.strip()
+    
+    # 先尝试清理后的JSON
+    try:
+        cleaned = clean_json_string(s)
+        return json.loads(cleaned)
+    except Exception as json_error:
+        pass
+    
+    # 再尝试原始JSON
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError as e:
+        # 提供详细的JSON错误信息
+        error_msg = str(e)
+        if "Expecting ',' delimiter" in error_msg:
+            raise ValueError("JSON格式错误：缺少逗号分隔符")
+        elif "Expecting property name enclosed in double quotes" in error_msg:
+            raise ValueError("JSON格式错误：属性名必须用双引号包围")
+        elif "Expecting value" in error_msg:
+            raise ValueError("JSON格式错误：属性值缺失")
+        elif "Extra data" in error_msg:
+            raise ValueError("JSON格式错误：存在多余字符")
+        elif "Expecting ',' delimiter" in error_msg or "Expecting '}'" in error_msg:
+            raise ValueError("JSON格式错误：可能是尾随逗号问题，请检查最后一个属性后是否有逗号")
+        else:
+            raise ValueError(f"JSON格式错误：{error_msg}")
+    except Exception:
+        pass
+    
+    # 最后尝试 Python 字面量（支持 True/False/None，单引号、元组等）
+    try:
+        return ast.literal_eval(s)
+    except Exception as e:
+        raise ValueError(f"无法解析为 JSON 或 Python 字典。\\n\\n常见问题：\\n1. 尾随逗号：最后一个属性后不能有逗号\\n2. 属性名必须用双引号包围\\n3. 字符串值必须用双引号包围\\n4. 布尔值使用 true/false（小写）\\n\\n原始错误：{e}")
 
-    // 格式化输入
-    formatInput() {
-        const input = this.inputArea.value.trim();
-        if (!input) {
-            this.outputArea.innerHTML = '<p style="color: var(--text-secondary); text-align: center; margin-top: 100px;">请输入Python字典数据</p>';
-            return;
-        }
+obj = parse_input(input_str)
 
-        try {
-            // 尝试解析Python字典格式
-            const parsedData = this.parsePythonDict(input);
-            
-            // 格式化右侧输出区域
-            const formattedOutput = this.formatOutput(parsedData);
-            this.outputArea.innerHTML = formattedOutput;
-            
-            // 绑定折叠事件
-            this.bindCollapseEvents();
-            
-        } catch (error) {
-            this.showError(`解析错误: ${error.message}`);
-        }
-    }
+if _mode == "json":
+    # JSON 输出：支持中文不转义、可选排序、缩进
+    _result = json.dumps(obj, ensure_ascii=False, indent=int(_indent), sort_keys=bool(_sort_keys))
+else:
+    # Python 输出：pprint 格式化
+    _result = pprint.pformat(obj, sort_dicts=bool(_sort_keys), indent=int(_indent), width=80, compact=False)
 
-    // 解析Python字典格式
-    parsePythonDict(input) {
-        // 预处理：将Python语法转换为JSON兼容格式
-        let processedInput = input
-            .replace(/'/g, '"')  // 单引号转双引号
-            .replace(/True/g, 'true')  // Python布尔值
-            .replace(/False/g, 'false')
-            .replace(/None/g, 'null')
-            .replace(/(\w+):/g, '"$1":')  // 键名加引号
-            .replace(/,(\s*[}\]])/g, '$1');  // 移除尾随逗号
+_result
+`;
 
-        try {
-            return JSON.parse(processedInput);
-        } catch (e) {
-            // 如果JSON解析失败，尝试更复杂的Python语法处理
-            return this.parseComplexPythonDict(input);
-        }
-    }
+  try {
+    const pretty = await pyodide.runPythonAsync(code);
+    els.output.textContent = pretty;
+    setStatus('right', '格式化完成', true, false);
+  } catch (err) {
+    const msg = (err && err.message) ? err.message : String(err);
+    els.output.textContent = '';
+    setStatus('right', '❌ 解析失败：' + msg, false, true);
+  } finally {
+    els.btnFormat.disabled = false;
+  }
+}
 
-    // 解析复杂Python字典语法
-    parseComplexPythonDict(input) {
-        // 这里可以实现更复杂的Python语法解析
-        // 目前使用简化的方法
-        throw new Error('不支持的Python字典格式，请使用标准格式');
-    }
+// 事件绑定
+els.btnFormat.addEventListener('click', formatNow);
+els.input.addEventListener('input', debounce(formatNow, 300));
+els.indent.addEventListener('change', formatNow);
+els.sortKeys.addEventListener('change', formatNow);
+document.addEventListener('keydown', (e) => {
+  const mac = navigator.platform.toLowerCase().includes('mac');
+  if ((mac ? e.metaKey : e.ctrlKey) && e.key === 'Enter') {
+    e.preventDefault();
+    formatNow();
+  }
+});
 
-    // 格式化输出
-    formatOutput(data, level = 0) {
-        if (data === null) {
-            return '<span class="dict-null">null</span>';
-        }
-        
-        if (typeof data === 'boolean') {
-            return `<span class="dict-boolean">${data}</span>`;
-        }
-        
-        if (typeof data === 'number') {
-            return `<span class="dict-number">${data}</span>`;
-        }
-        
-        if (typeof data === 'string') {
-            return `<span class="dict-string">"${this.escapeHtml(data)}"</span>`;
-        }
-        
-        if (Array.isArray(data)) {
-            return this.formatArray(data, level);
-        }
-        
-        if (typeof data === 'object') {
-            return this.formatObject(data, level);
-        }
-        
-        return String(data);
-    }
+els.btnCopy.addEventListener('click', async () => {
+  const txt = els.output.textContent || '';
+  if (!txt) return;
+  try { 
+    await navigator.clipboard.writeText(txt); 
+    setStatus('right', '已复制到剪贴板', true, false); 
+  }
+  catch { 
+    setStatus('right', '复制失败，请手动复制', false, true); 
+  }
+});
 
-    // 格式化数组
-    formatArray(array, level) {
-        if (array.length === 0) {
-            return '<span class="dict-bracket">[</span><span class="dict-bracket">]</span>';
-        }
+els.btnDownload.addEventListener('click', () => {
+  const txt = els.output.textContent || '';
+  if (!txt) return;
+  
+  // 根据输出模式决定文件类型和扩展名
+  const mode = els.modeRadios().value;
+  const fileExt = mode === 'json' ? '.json' : '.txt';
+  const mimeType = mode === 'json' ? 'application/json;charset=utf-8' : 'text/plain;charset=utf-8';
+  
+  const blob = new Blob([txt], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `beautified${fileExt}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+});
 
-        const indent = '    '.repeat(level);
-        const nextLevel = level + 1;
-        const nextIndent = '    '.repeat(nextLevel);
-        
-        let html = '<span class="dict-bracket">[</span>';
-        
-        if (this.shouldCollapse(array, level)) {
-            const id = this.generateId();
-            html += `<span class="collapsible" data-target="${id}">`;
-            html += `<span class="collapse-icon">▶</span>`;
-            html += `<span class="dict-value">${array.length} 项</span>`;
-            html += '</span>';
-            html += `<div class="collapsible-content" id="${id}">`;
-            
-            array.forEach((item, index) => {
-                html += `${nextIndent}${this.formatOutput(item, nextLevel)}`;
-                if (index < array.length - 1) {
-                    html += '<span class="dict-comma">,</span>';
-                }
-                html += '<br>';
-            });
-            
-            html += `${indent}</div>`;
-        } else {
-            html += '<br>';
-            array.forEach((item, index) => {
-                html += `${nextIndent}${this.formatOutput(item, nextLevel)}`;
-                if (index < array.length - 1) {
-                    html += '<span class="dict-comma">,</span>';
-                }
-                html += '<br>';
-            });
-        }
-        
-        html += `${indent}<span class="dict-bracket">]</span>`;
-        return html;
-    }
+// 示例与清空
+els.samplePy.addEventListener('click', () => {
+  els.input.value = `{
+  'name': 'Rui',
+  'age': 20,
+  'website': 'https://ruizhenyang.github.io/',
+  'bool': True,
+  'none': None,
+  'list': ['a','b','c'],
+  'tuple': ('a','b','c'),
+  'dict': {'a':1,'b':2,'c':3},
+  'int': 1,
+  'float': 1.0,
+  'str': 'a'
+}`;
+  formatNow();
+});
 
-    // 格式化对象
-    formatObject(obj, level) {
-        const keys = Object.keys(obj);
-        if (keys.length === 0) {
-            return '<span class="dict-bracket">{</span><span class="dict-bracket">}</span>';
-        }
+els.sampleJson.addEventListener('click', () => {
+  els.input.value = `{
+  "name": "Rui",
+  "age": 20,
+  "website": "https://ruizhenyang.github.io/",
+  "bool": true,
+  "none": null,
+  "list": ["a","b","c"],
+  "dict": {"a":1,"b":2,"c":3},
+  "int": 1,
+  "float": 1.0,
+  "str": "a"
+}`;
+  formatNow();
+});
 
-        const indent = '    '.repeat(level);
-        const nextLevel = level + 1;
-        const nextIndent = '    '.repeat(nextLevel);
-        
-        let html = '<span class="dict-bracket">{</span>';
-        
-        if (this.shouldCollapse(obj, level)) {
-            const id = this.generateId();
-            html += `<span class="collapsible" data-target="${id}">`;
-            html += `<span class="collapse-icon">▶</span>`;
-            html += `<span class="dict-value">${keys.length} 个键值对</span>`;
-            html += '</span>';
-            html += `<div class="collapsible-content" id="${id}">`;
-            
-            keys.forEach((key, index) => {
-                html += `${nextIndent}<span class="dict-key">"${this.escapeHtml(key)}"</span>: `;
-                html += this.formatOutput(obj[key], nextLevel);
-                if (index < keys.length - 1) {
-                    html += '<span class="dict-comma">,</span>';
-                }
-                html += '<br>';
-            });
-            
-            html += `${indent}</div>`;
-        } else {
-            html += '<br>';
-            keys.forEach((key, index) => {
-                html += `${nextIndent}<span class="dict-key">"${this.escapeHtml(key)}"</span>: `;
-                html += this.formatOutput(obj[key], nextLevel);
-                if (index < keys.length - 1) {
-                    html += '<span class="dict-comma">,</span>';
-                }
-                html += '<br>';
-            });
-        }
-        
-        html += `${indent}<span class="dict-bracket">}</span>`;
-        return html;
-    }
+els.clearBtn.addEventListener('click', () => {
+  els.input.value = '';
+  els.output.textContent = '';
+  setStatus('right', '已清空');
+});
 
-    // 判断是否应该折叠
-    shouldCollapse(data, level) {
-        if (level >= 2) return true;
-        if (Array.isArray(data) && data.length > 3) return true;
-        if (typeof data === 'object' && Object.keys(data).length > 3) return true;
-        return false;
-    }
-
-    // 生成唯一ID
-    generateId() {
-        return 'collapse_' + Math.random().toString(36).substr(2, 9);
-    }
-
-    // HTML转义
-    escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-
-    // 绑定折叠事件
-    bindCollapseEvents() {
-        const collapsibles = document.querySelectorAll('.collapsible');
-        collapsibles.forEach(collapsible => {
-            collapsible.addEventListener('click', (e) => {
-                const targetId = collapsible.getAttribute('data-target');
-                const target = document.getElementById(targetId);
-                const icon = collapsible.querySelector('.collapse-icon');
-                
-                if (target.classList.contains('collapsed')) {
-                    target.classList.remove('collapsed');
-                    icon.classList.remove('collapsed');
-                } else {
-                    target.classList.add('collapsed');
-                    icon.classList.add('collapsed');
-                }
-            });
-        });
-    }
-
-    // 展开全部
-    expandAll() {
-        const collapsedContents = document.querySelectorAll('.collapsible-content.collapsed');
-        const collapsedIcons = document.querySelectorAll('.collapse-icon.collapsed');
-        
-        collapsedContents.forEach(content => content.classList.remove('collapsed'));
-        collapsedIcons.forEach(icon => icon.classList.remove('collapsed'));
-    }
-
-    // 折叠全部
-    collapseAll() {
-        const allContents = document.querySelectorAll('.collapsible-content');
-        const allIcons = document.querySelectorAll('.collapse-icon');
-        
-        allContents.forEach(content => content.classList.add('collapsed'));
-        allIcons.forEach(icon => icon.classList.add('collapsed'));
-    }
-
-    // 清空输入
-    clearInput() {
-        this.inputArea.value = '';
-        this.outputArea.innerHTML = '<p style="color: var(--text-secondary); text-align: center; margin-top: 100px;">请输入Python字典数据</p>';
-        this.inputArea.focus();
-    }
-
-    // 复制输出
-    copyOutput() {
-        const outputText = this.outputArea.innerText;
-        if (navigator.clipboard) {
-            navigator.clipboard.writeText(outputText).then(() => {
-                this.showSuccess('已复制到剪贴板');
-            }).catch(() => {
-                this.fallbackCopy(outputText);
-            });
-        } else {
-            this.fallbackCopy(outputText);
-        }
-    }
-
-    // 备用复制方法
-    fallbackCopy(text) {
-        const textArea = document.createElement('textarea');
-        textArea.value = text;
-        document.body.appendChild(textArea);
-        textArea.select();
-        try {
-            document.execCommand('copy');
-            this.showSuccess('已复制到剪贴板');
-        } catch (err) {
-            this.showError('复制失败');
-        }
-        document.body.removeChild(textArea);
-    }
-
-    // 显示成功消息
-    showSuccess(message) {
-        const successDiv = document.createElement('div');
-        successDiv.className = 'success-message';
-        successDiv.textContent = message;
-        
-        this.outputArea.insertBefore(successDiv, this.outputArea.firstChild);
-        
-        setTimeout(() => {
-            successDiv.remove();
-        }, 3000);
-    }
-
-    // 显示错误消息
-    showError(message) {
-        this.outputArea.innerHTML = `
-            <div style="color: var(--error-color); text-align: center; margin-top: 100px; padding: 20px;">
-                <h3>❌ 解析失败</h3>
-                <p>${message}</p>
-                <p style="font-size: 0.9em; margin-top: 10px; color: var(--text-secondary);">
-                    请检查输入格式是否正确
-                </p>
-            </div>
-            <div style="margin-top: 20px; padding: 20px; background: #F8F9FA; border-radius: 8px; border: 1px solid #E9ECEF;">
-                <h4 style="margin-bottom: 10px; color: var(--text-primary);">💡 支持的格式示例：</h4>
-                <pre style="background: #FFFFFF; padding: 15px; border-radius: 6px; border: 1px solid #DEE2E6; overflow-x: auto; font-size: 12px; line-height: 1.4;">
-{
-    "name": "张三",
-    "age": 25,
-    "hobbies": ["读书", "游泳"]
-}</pre>
-            </div>
-        `;
-    }
+function debounce(fn, wait=300) {
+  let t = null;
+  return function(...args) {
+    clearTimeout(t);
+    t = setTimeout(() => fn.apply(this, args), wait);
+  }
 }
 
 // 页面加载完成后初始化
 document.addEventListener('DOMContentLoaded', () => {
-    new DictFormatter();
-});
-
-// 添加一些额外的功能增强
-document.addEventListener('DOMContentLoaded', () => {
-    // 添加键盘导航提示
-    const helpText = document.createElement('div');
-    helpText.style.cssText = `
-        position: fixed;
-        bottom: 20px;
-        right: 20px;
-        background: rgba(0, 0, 0, 0.8);
-        color: white;
-        padding: 12px 16px;
-        border-radius: 8px;
-        font-size: 12px;
-        opacity: 0.8;
-        transition: opacity 0.3s;
-        z-index: 1000;
-    `;
-    helpText.innerHTML = `
-        <strong>快捷键:</strong><br>
-        Ctrl+Enter: 格式化<br>
-        Ctrl+L: 清空<br>
-    `;
-    
-    helpText.addEventListener('mouseenter', () => helpText.style.opacity = '1');
-    helpText.addEventListener('mouseleave', () => helpText.style.opacity = '0.8');
-    
-    document.body.appendChild(helpText);
-    
-    // 5秒后自动隐藏
-    setTimeout(() => {
-        helpText.style.opacity = '0';
-        setTimeout(() => helpText.remove(), 300);
-    }, 5000);
+  boot();
 });
