@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Python字典美化</title>
+    <link rel="stylesheet" href="index.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@300;400;500;600&display=swap" rel="stylesheet">
+
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1 class="title">🐍Python字典美化工具</h1>
+            <p class="subtitle">优雅地格式化和展示Python字典数据</p>
+        </header>
+        
+        <main class="main-content">
+            <div class="input-section">
+                <div class="section-header">
+                    <h2>输入数据</h2>
+                    <div class="actions">
+                        <button class="btn btn-secondary" id="clearBtn">清空</button>
+                        <button class="btn btn-primary" id="formatBtn">格式化</button>
+                    </div>
+                </div>
+                <div class="input-container">
+                    <textarea 
+                        id="inputArea" 
+                        placeholder="请输入Python字典数据，例如：{'name': '张三', 'age': 25, 'hobbies': ['读书', '游泳']}"
+                        class="input-textarea"
+                    ></textarea>
+                </div>
+            </div>
+            
+            <div class="output-section">
+                <div class="section-header">
+                    <h2>格式化结果</h2>
+                    <div class="actions">
+                        <button class="btn btn-secondary" id="copyBtn">复制</button>
+                        <button class="btn btn-secondary" id="expandAllBtn">展开全部</button>
+                        <button class="btn btn-secondary" id="collapseAllBtn">折叠全部</button>
+                    </div>
+                </div>
+                <div class="output-container">
+                    <div id="outputArea" class="output-content"></div>
+                </div>
+            </div>
+        </main>
+        
+        <footer class="footer">
+            <p>© 2025 Python字典美化工具 - 优雅的代码格式化体验</p>
+        </footer>
+    </div>
+    
+    <script src="index.js"></script>
+</body>
+</html>
